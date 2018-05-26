@@ -56,7 +56,7 @@ class GooglePlayAPI(object):
         self.debug = debug
         self.proxies_config = proxies_config
         self.deviceBuilder = config.DeviceBuilder(device_codename)
-        self.deviceBuilder.setLocale(locale)
+        self.deviceBuilder.set_locale(locale)
         if timezone is not None:
             self.deviceBuilder.timezone = timezone
         if sim_operator is not None:
@@ -351,7 +351,17 @@ class GooglePlayAPI(object):
         packageName is the app unique ID (usually starting with 'com.')."""
         path = "details?doc=%s" % requests.utils.quote(packageName)
         data = self.executeRequestApi2(path)
-        return utils.fromDocToDictionary(data.payload.detailsResponse.docV2)
+        result = utils.fromDocToDictionary(data.payload.detailsResponse.docV2)
+        for r in data.payload.detailsResponse.docV2.unknown25.item:
+            if r.label == 'Released On':
+                result['releaseDate'] = r.container.value
+            elif r.label == 'Developer e-mail':
+                result['email'] = r.container.value
+            elif r.label == 'Developer address':
+                result['address'] = r.container.value
+            # else:
+            #     result[r.label] = r.container.value
+        return result
 
     def bulkDetails(self, packageNames):
         """Get several apps details from a list of package names.
