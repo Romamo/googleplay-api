@@ -10,6 +10,11 @@ import requests
 from base64 import b64decode, urlsafe_b64encode
 from datetime import datetime
 
+from future.standard_library import install_aliases
+install_aliases()
+
+from urllib.parse import urljoin
+
 from . import googleplay_pb2, config, utils
 
 ssl_verify = True
@@ -350,7 +355,7 @@ class GooglePlayAPI(object):
                 if len(cluster.doc) == 0:
                     break
                 if cluster.doc[0].containerMetadata.nextPageUrl != "":
-                    nextPath = cluster.doc[0].containerMetadata.nextPageUrl
+                    nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
                 else:
                     nextPath = None
                 apps = []
