@@ -301,6 +301,8 @@ class GooglePlayAPI(object):
                                     proxies=self.proxies_config)
 
         message = googleplay_pb2.ResponseWrapper.FromString(response.content)
+        # with open('data/protobuf.bin', 'wb') as f:
+        #     f.write(response.content)
         if message.commands.displayErrorMessage != "":
             raise RequestError(message.commands.displayErrorMessage)
 
@@ -316,6 +318,57 @@ class GooglePlayAPI(object):
         return [{"type": e.type,
                  "suggestedQuery": e.suggestedQuery,
                  "title": e.title} for e in response.entry]
+
+    def search_withclusters(self, query, nb_result, offset=None, withclusters=True):
+        """ Search the play store for an app.
+
+        nb_result is the maximum number of result to be returned.
+
+        offset is used to take result starting from an index.
+        """
+        if self.authSubToken is None:
+            raise Exception("You need to login before executing any request")
+
+        remaining = nb_result
+        output = {}
+
+        nextPath = SEARCH_URL + "?c=3&q={}".format(requests.utils.quote(query))
+        if (offset is not None):
+            nextPath += "&o={}".format(offset)
+        while remaining > 0 and nextPath is not None:
+            currentPath = nextPath
+            data = self.executeRequestApi2(currentPath)
+            if utils.hasPrefetch(data):
+                response = data.preFetch[0].response
+            else:
+                response = data
+            if utils.hasSearchResponse(response.payload):
+                # we still need to fetch the first page, so go to
+                # next loop iteration without decrementing counter
+                nextPath = FDFE + response.payload.searchResponse.nextPageUrl
+                continue
+            if utils.hasListResponse(response.payload):
+                cluster = response.payload.listResponse.cluster
+                if len(cluster) == 0:
+                    # unexpected behaviour, probably due to expired token
+                    raise LoginError('Unexpected behaviour, probably expired '
+                                     'token')
+                cluster = cluster[0]
+                if len(cluster.doc) == 0:
+                    break
+                if cluster.doc[0].containerMetadata.nextPageUrl != "":
+                    nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
+                else:
+                    nextPath = None
+                apps = []
+                for doc in cluster.doc:
+                    apps.extend(doc.child)
+                    if output.get(doc.backendDocid) is None:
+                        output[doc.backendDocid] = []
+                    output[doc.backendDocid] += list(map(utils.fromDocToDictionary, doc.child))
+                remaining -= len(apps)
+
+        return output
 
     def search(self, query, nb_result, offset=None):
         """ Search the play store for an app.
