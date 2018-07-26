@@ -430,12 +430,14 @@ class GooglePlayAPI(object):
         data = self.executeRequestApi2(path)
         result = utils.fromDocToDictionary(data.payload.detailsResponse.docV2)
         for r in data.payload.detailsResponse.docV2.unknown25.item:
-            if r.label == 'Released On':
+            if r.label == 'Released on':
                 result['releaseDate'] = r.container.value
             elif r.label == 'Developer e-mail':
                 result['email'] = r.container.value
             elif r.label == 'Developer address':
                 result['address'] = r.container.value
+            elif r.label == 'In-app purchases':
+                result['inapp'] = True
             # else:
             #     result[r.label] = r.container.value
         return result
