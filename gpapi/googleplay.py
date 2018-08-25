@@ -9,7 +9,6 @@ from Crypto.Cipher import PKCS1_OAEP
 import requests
 from base64 import b64decode, urlsafe_b64encode
 from datetime import datetime
-
 from future.standard_library import install_aliases
 install_aliases()
 
@@ -216,7 +215,7 @@ class GooglePlayAPI(object):
             self.gsfId = gsfId
             self.setAuthSubToken(authSubToken)
             # check if token is valid with a simple search
-            self.search('firefox', 1, None)
+            # self.search('firefox', 1, None)
         else:
             raise LoginError('Either (email,pass) or (gsfId, authSubToken) is needed')
 
@@ -300,6 +299,8 @@ class GooglePlayAPI(object):
                                     timeout=60,
                                     proxies=self.proxies_config)
 
+        if response.status_code != 200:
+            raise RequestError(str(response.status_code))
         message = googleplay_pb2.ResponseWrapper.FromString(response.content)
         # with open('data/protobuf.bin', 'wb') as f:
         #     f.write(response.content)
@@ -319,7 +320,7 @@ class GooglePlayAPI(object):
                  "suggestedQuery": e.suggestedQuery,
                  "title": e.title} for e in response.entry]
 
-    def search_withclusters(self, query, nb_result, offset=None, withclusters=True):
+    def search_withclusters(self, query, nb_result, offset=None, withclusters=True, apps_lookup=None):
         """ Search the play store for an app.
 
         nb_result is the maximum number of result to be returned.
@@ -366,7 +367,14 @@ class GooglePlayAPI(object):
                     if output.get(doc.backendDocid) is None:
                         output[doc.backendDocid] = []
                     output[doc.backendDocid] += list(map(utils.fromDocToDictionary, doc.child))
+                    if apps_lookup is not None:
+                        apps2 = [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]
+                        apps_lookup = set(apps_lookup) - set(apps2)
+
                 remaining -= len(apps)
+                # print("Apps remaining", remaining)
+                if apps_lookup is not None and not apps_lookup:
+                    break
 
         return output
 
