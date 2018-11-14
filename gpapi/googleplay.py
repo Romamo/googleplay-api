@@ -1,18 +1,17 @@
 #!/usr/bin/python
 
-
-from Crypto.Util import asn1
-from Crypto.PublicKey import RSA
-from Crypto.Hash import SHA
-from Crypto.Cipher import PKCS1_OAEP
-
-import requests
 from base64 import b64decode, urlsafe_b64encode
 from datetime import datetime
-from future.standard_library import install_aliases
-install_aliases()
 
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import load_der_public_key
+from cryptography.hazmat.primitives.asymmetric import padding
+import string
 from urllib.parse import urljoin
+
+import requests
 
 from . import googleplay_pb2, config, utils
 
@@ -56,6 +55,9 @@ class RequestError(Exception):
     def __str__(self):
         return repr(self.value)
 
+class SecurityCheckError(Exception):
+    pass
+
 
 class GooglePlayAPI(object):
     """Google Play Unofficial API Class
@@ -79,26 +81,60 @@ class GooglePlayAPI(object):
     def set_timezone(self, timezone):
         self.deviceBuilder.set_timezone(timezone)
 
-    def encrypt_password(self, login, passwd):
-        """Encrypt the password using the google publickey, using
-        the RSA encryption algorithm"""
+    def get_token(self, offset):
+        code = "AEIMQUYcgkosw048"
+        code_suffix = "=BCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if offset >= 254:
+            offset += 1
+        i = offset // 16
+        j = offset % 16
+        s = offset // 128
+        if s > 0:
+            i -= 8 * (s - 1)
+        key = string.ascii_uppercase[i] + code[j]
+        token = "C" + key + requests.utils.quote(code_suffix[s])
+        return token
 
+    def encrypt_password(self, login, passwd):
+        """Encrypt credentials using the google publickey, with the
+        RSA algorithm"""
+
+        # structure of the binary key:
+        #
+        # *-------------------------------------------------------*
+        # | modulus_length | modulus | exponent_length | exponent |
+        # *-------------------------------------------------------*
+        #
+        # modulus_length and exponent_length are uint32
         binaryKey = b64decode(config.GOOGLE_PUBKEY)
+        # modulus
         i = utils.readInt(binaryKey, 0)
         modulus = utils.toBigInt(binaryKey[4:][0:i])
+        # exponent
         j = utils.readInt(binaryKey, i + 4)
         exponent = utils.toBigInt(binaryKey[i + 8:][0:j])
 
-        seq = asn1.DerSequence()
-        seq.append(modulus)
-        seq.append(exponent)
+        # calculate SHA1 of the pub key
+        digest = hashes.Hash(hashes.SHA1(), backend=default_backend())
+        digest.update(binaryKey)
+        h = b'\x00' + digest.finalize()[0:4]
 
-        publicKey = RSA.importKey(seq.encode())
-        cipher = PKCS1_OAEP.new(publicKey)
-        combined = login.encode() + b'\x00' + passwd.encode()
-        encrypted = cipher.encrypt(combined)
-        h = b'\x00' + SHA.new(binaryKey).digest()[0:4]
-        return urlsafe_b64encode(h + encrypted)
+        # generate a public key
+        der_data = encode_dss_signature(modulus, exponent)
+        publicKey = load_der_public_key(der_data, backend=default_backend())
+
+        # encrypt email and password using pubkey
+        to_be_encrypted = login.encode() + b'\x00' + passwd.encode()
+        ciphertext = publicKey.encrypt(
+            to_be_encrypted,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA1()),
+                algorithm=hashes.SHA1(),
+                label=None
+            )
+        )
+
+        return urlsafe_b64encode(h + ciphertext)
 
     def setAuthSubToken(self, authSubToken):
         self.authSubToken = authSubToken
@@ -200,9 +236,8 @@ class GooglePlayAPI(object):
                 ac2dmToken = params["auth"]
             elif "error" in params:
                 if "NeedsBrowser" in params["error"]:
-                    raise LoginError("Security check is needed, try to visit "
-                                     "https://accounts.google.com/b/0/DisplayUnlockCaptcha "
-                                     "to unlock, or setup an app-specific password")
+                    # https://accounts.google.com/b/0/DisplayUnlockCaptcha
+                    raise SecurityCheckError()
                 raise LoginError("server says: " + params["error"])
             else:
                 raise LoginError("Auth token not found.")
@@ -333,11 +368,17 @@ class GooglePlayAPI(object):
         remaining = nb_result
         output = {}
 
+        backendDocid_count = ['search_results_cluster_apps_range_0_10', 'search_results_cluster_apps_range_10_250',
+                              'search_collection_more_results_cluster', 'search_results_cluster_apps']
+        apps_count = 0
+
         nextPath = SEARCH_URL + "?c=3&q={}".format(requests.utils.quote(query))
-        if (offset is not None):
-            nextPath += "&o={}".format(offset)
+
+        nextPathList = []
+
         while remaining > 0 and nextPath is not None:
             currentPath = nextPath
+            # print(currentPath)
             data = self.executeRequestApi2(currentPath)
             if utils.hasPrefetch(data):
                 response = data.preFetch[0].response
@@ -355,24 +396,43 @@ class GooglePlayAPI(object):
                     raise LoginError('Unexpected behaviour, probably expired '
                                      'token')
                 cluster = cluster[0]
-                if len(cluster.doc) == 0:
-                    break
-                if cluster.doc[0].containerMetadata.nextPageUrl != "":
-                    nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
-                else:
-                    nextPath = None
-                apps = []
+                # if len(cluster.doc) == 0:
+                #     break
+                # if cluster.doc[0].containerMetadata.nextPageUrl != "":
+                #     nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
+                # elif len(cluster.doc) > 1 and cluster.doc[-1].containerMetadata.nextPageUrl != "":
+                #     nextPath = urljoin(nextPath, cluster.doc[-1].containerMetadata.nextPageUrl)
+                # else:
+                #     nextPath = None
+                #     # from urllib.parse import urlparse, parse_qs, urlunparse
+                #     # o = urlparse(nextPath)
+                #     # qs = parse_qs(o.query)
+                #     # offset = 4
+                #     # qs['ctntkn'] = self.get_token(int(offset))
+                #     # o.query = "&".join(qs)
+                #     # nextPath = urlunparse(o)
                 for doc in cluster.doc:
-                    apps.extend(doc.child)
+                    if doc.backendDocid in backendDocid_count:
+                        apps_count += len(doc.child)
+                        # apps.extend(doc.child)
                     if output.get(doc.backendDocid) is None:
                         output[doc.backendDocid] = []
+                    # print(doc.backendDocid, len([r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]), [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)])
                     output[doc.backendDocid] += list(map(utils.fromDocToDictionary, doc.child))
+                    if doc.containerMetadata.nextPageUrl:
+                        # print(doc.containerMetadata.nextPageUrl)
+                        if doc.backendDocid not in backendDocid_count or nb_result - apps_count > 0:
+                            nextPathList.append(doc.containerMetadata.nextPageUrl)
                     if apps_lookup is not None:
                         apps2 = [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]
                         apps_lookup = set(apps_lookup) - set(apps2)
 
-                remaining -= len(apps)
-                # print("Apps remaining", remaining)
+                if nextPathList:
+                    nextPath = urljoin(currentPath, nextPathList.pop(0))
+                else:
+                    nextPath = None
+
+                remaining = 1
                 if apps_lookup is not None and not apps_lookup:
                     break
 
@@ -416,7 +476,7 @@ class GooglePlayAPI(object):
                 if len(cluster.doc) == 0:
                     break
                 if cluster.doc[0].containerMetadata.nextPageUrl != "":
-                    nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
+                    nextPath = FDFE + cluster.doc[0].containerMetadata.nextPageUrl
                 else:
                     nextPath = None
                 apps = []
@@ -526,60 +586,6 @@ class GooglePlayAPI(object):
                 output.append(section)
         return output
 
-    def list2(self, cat, ctr=None, nb_results=None, offset=None):
-        """List apps for a specfic category *cat*.
-
-        If ctr (subcategory ID) is None, returns a list of valid subcategories.
-
-        If ctr is provided, list apps within this subcategory."""
-        if self.authSubToken is None:
-            raise Exception("You need to login before executing any request")
-
-        remaining = nb_results
-        output = []
-
-        nextPath = "list?c=3&cat=%s" % requests.utils.quote(cat)
-        if ctr is not None:
-            nextPath += "&ctr=%s" % requests.utils.quote(ctr)
-        if nb_results is not None:
-            nextPath += "&n=%s" % requests.utils.quote('60' if nb_results > 60 else str(nb_results))
-
-        # if (offset is not None):
-        #     nextPath += "&o=%d" % int(offset)
-        while remaining > 0 and nextPath is not None:
-            currentPath = nextPath
-            data = self.executeRequestApi2(currentPath)
-            if utils.hasPrefetch(data):
-                response = data.preFetch[0].response
-            else:
-                response = data
-            if utils.hasSearchResponse(response.payload):
-                # we still need to fetch the first page, so go to
-                # next loop iteration without decrementing counter
-                nextPath = response.payload.searchResponse.nextPageUrl
-                continue
-            if utils.hasListResponse(response.payload):
-                cluster = response.payload.listResponse.cluster
-                if len(cluster) == 0:
-                    # strange behaviour, probably due to expired token
-                    raise LoginError('Unexpected behaviour, probably expired '
-                                     'token')
-                cluster = cluster[0]
-                if len(cluster.doc) == 0:
-                    break
-                if cluster.doc[0].containerMetadata.nextPageUrl != "":
-                    nextPath = cluster.doc[0].containerMetadata.nextPageUrl
-                else:
-                    nextPath = None
-                apps = list(chain.from_iterable([doc.child for doc in cluster.doc]))
-                output += list(map(utils.fromDocToDictionary, apps))
-                remaining -= len(apps)
-
-        if len(output) > nb_results:
-            output = output[:nb_results]
-
-        return output
-
     def list(self, cat, ctr=None, nb_results=None, offset=None):
         """List apps for a specfic category *cat*.
 
@@ -592,7 +598,9 @@ class GooglePlayAPI(object):
         if nb_results is not None:
             path += "&n={}".format(requests.utils.quote(nb_results))
         if offset is not None:
-            path += "&o={}".format(requests.utils.quote(offset))
+            # path += "&o={}".format(requests.utils.quote(offset))
+            # path += '&ctntkn=' +self.get_token(int(offset))
+            path += "&ctntkn=" + self.get_token(int(offset))
         data = self.executeRequestApi2(path)
         clusters = []
         docs = []
