@@ -368,8 +368,6 @@ class GooglePlayAPI(object):
         remaining = nb_result
         output = {}
 
-        backendDocid_count = ['search_results_cluster_apps_range_0_10', 'search_results_cluster_apps_range_10_250',
-                              'search_collection_more_results_cluster', 'search_results_cluster_apps']
         apps_count = 0
 
         nextPath = SEARCH_URL + "?c=3&q={}".format(requests.utils.quote(query))
@@ -412,17 +410,19 @@ class GooglePlayAPI(object):
                 #     # o.query = "&".join(qs)
                 #     # nextPath = urlunparse(o)
                 for doc in cluster.doc:
-                    if doc.backendDocid in backendDocid_count:
-                        apps_count += len(doc.child)
-                        # apps.extend(doc.child)
                     if output.get(doc.backendDocid) is None:
                         output[doc.backendDocid] = []
                     # print(doc.backendDocid, len([r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]), [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)])
                     output[doc.backendDocid] += list(map(utils.fromDocToDictionary, doc.child))
+
+                    if doc.backendDocid.find('_cluster') >= 0:  # or doc.backendDocid in backendDocid_count
+                        apps_count += len(doc.child)
+
                     if doc.containerMetadata.nextPageUrl:
                         # print(doc.containerMetadata.nextPageUrl)
-                        if doc.backendDocid not in backendDocid_count or nb_result - apps_count > 0:
+                        if nb_result - apps_count > 0 or doc.backendDocid.find('_cluster') == -1:
                             nextPathList.append(doc.containerMetadata.nextPageUrl)
+
                     if apps_lookup is not None:
                         apps2 = [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]
                         apps_lookup = set(apps_lookup) - set(apps2)

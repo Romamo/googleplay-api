@@ -41,8 +41,8 @@ for a in apps:
     print(a['docId'])
 
 print("Search with clusters")
-# clusters = server.search_withclusters('chat flirt app', 100, None)
-# clusters = server.search_withclusters('facebook downloader', 100, None)
+clusters = server.search_withclusters('chat flirt app', 100, None)
+clusters = server.search_withclusters('facebook downloader', 100, None)
 clusters = server.search_withclusters('zombie games', 100, None)
 print('nb_result: 100')
 # print('number of results: %d' % len(apps))
