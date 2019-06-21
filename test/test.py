@@ -28,6 +28,13 @@ else:
 
 # SEARCH
 
+# DETAILS
+# print('\nGetting details for %s\n' % testApps[0])
+details = server.details("com.funnyvideos.babytoy")
+
+print(details)
+
+
 apps = server.search('fir', 100, None)
 
 print('\nSearch suggestion for "fir"\n')
@@ -41,9 +48,10 @@ for a in apps:
     print(a['docId'])
 
 print("Search with clusters")
-clusters = server.search_withclusters('chat flirt app', 100, None)
-clusters = server.search_withclusters('facebook downloader', 100, None)
-clusters = server.search_withclusters('zombie games', 100, None)
+# clusters = server.search_withclusters('strangers chat', 100, None)
+# clusters = server.search_withclusters('facebook downloader', 100, None)
+# clusters = server.search_withclusters('zombie games', 100, None)
+clusters = server.search_withclusters('chicken run', 100, None)
 print('nb_result: 100')
 # print('number of results: %d' % len(apps))
 
