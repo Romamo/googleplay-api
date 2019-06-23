@@ -23,7 +23,7 @@ CHECKIN_URL = BASE + "checkin"
 AUTH_URL = BASE + "auth"
 
 UPLOAD_URL = FDFE + "uploadDeviceConfig"
-SEARCH_URL = FDFE + "search"
+SEARCH_URL = FDFE + "searchList"
 DETAILS_URL = FDFE + "details"
 HOME_URL = FDFE + "homeV2"
 BROWSE_URL = FDFE + "browse"
@@ -33,6 +33,7 @@ SEARCH_SUGGEST_URL = FDFE + "searchSuggest"
 BULK_URL = FDFE + "bulkDetails"
 LOG_URL = FDFE + "log"
 TOC_URL = FDFE + "toc"
+ACCEPT_TOS_URL = FDFE + "acceptTos"
 LIST_URL = FDFE + "list"
 REVIEWS_URL = FDFE + "rev"
 
@@ -56,7 +57,11 @@ class RequestError(Exception):
         return repr(self.value)
 
 class SecurityCheckError(Exception):
-    pass
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
 
 
 class GooglePlayAPI(object):
@@ -65,21 +70,23 @@ class GooglePlayAPI(object):
     Usual APIs methods are login(), search(), details(), bulkDetails(),
     download(), browse(), reviews() and list()."""
 
-    def __init__(self, locale, timezone, device_codename='bacon',
+    def __init__(self, locale="en_US", timezone="UTC", device_codename="bacon",
                  proxies_config=None):
         self.authSubToken = None
         self.gsfId = None
         self.device_config_token = None
+        self.deviceCheckinConsistencyToken = None
+        self.dfeCookie = None
         self.proxies_config = proxies_config
         self.deviceBuilder = config.DeviceBuilder(device_codename)
-        self.set_locale(locale)
-        self.set_timezone(timezone)
+        self.setLocale(locale)
+        self.setTimezone(timezone)
 
-    def set_locale(self, locale):
-        self.deviceBuilder.set_locale(locale)
+    def setLocale(self, locale):
+        self.deviceBuilder.setLocale(locale)
 
-    def set_timezone(self, timezone):
-        self.deviceBuilder.set_timezone(timezone)
+    def setTimezone(self, timezone):
+        self.deviceBuilder.setTimezone(timezone)
 
     def get_token(self, offset):
         code = "AEIMQUYcgkosw048"
@@ -95,7 +102,7 @@ class GooglePlayAPI(object):
         token = "C" + key + requests.utils.quote(code_suffix[s])
         return token
 
-    def encrypt_password(self, login, passwd):
+    def encryptPassword(self, login, passwd):
         """Encrypt credentials using the google publickey, with the
         RSA algorithm"""
 
@@ -153,6 +160,10 @@ class GooglePlayAPI(object):
             headers["Authorization"] = "GoogleLogin auth=%s" % self.authSubToken
         if self.device_config_token is not None:
             headers["X-DFE-Device-Config-Token"] = self.device_config_token
+        if self.deviceCheckinConsistencyToken is not None:
+            headers["X-DFE-Device-Checkin-Consistency-Token"] = self.deviceCheckinConsistencyToken
+        if self.dfeCookie is not None:
+            headers["X-DFE-Cookie"] = self.dfeCookie
         return headers
 
     def checkin(self, email, ac2dmToken):
@@ -167,6 +178,7 @@ class GooglePlayAPI(object):
                             proxies=self.proxies_config)
         response = googleplay_pb2.AndroidCheckinResponse()
         response.ParseFromString(res.content)
+        self.deviceCheckinConsistencyToken = response.deviceCheckinConsistencyToken
 
         # checkin again to upload gfsid
         request.id = response.androidId
@@ -215,7 +227,7 @@ class GooglePlayAPI(object):
             # First time setup, where we obtain an ac2dm token and
             # upload device information
 
-            encryptedPass = self.encrypt_password(email, password).decode('utf-8')
+            encryptedPass = self.encryptPassword(email, password).decode('utf-8')
             # AC2DM token
             params = self.deviceBuilder.getLoginParams(email, encryptedPass)
             params['service'] = 'ac2dm'
@@ -236,8 +248,9 @@ class GooglePlayAPI(object):
                 ac2dmToken = params["auth"]
             elif "error" in params:
                 if "NeedsBrowser" in params["error"]:
-                    # https://accounts.google.com/b/0/DisplayUnlockCaptcha
-                    raise SecurityCheckError()
+                    raise SecurityCheckError("Security check is needed, try to visit "
+                                     "https://accounts.google.com/b/0/DisplayUnlockCaptcha "
+                                     "to unlock, or setup an app-specific password")
                 raise LoginError("server says: " + params["error"])
             else:
                 raise LoginError("Auth token not found.")
@@ -250,7 +263,7 @@ class GooglePlayAPI(object):
             self.gsfId = gsfId
             self.setAuthSubToken(authSubToken)
             # check if token is valid with a simple search
-            # self.search('firefox', 1, None)
+            # self.search('drv')
         else:
             raise LoginError('Either (email,pass) or (gsfId, authSubToken) is needed')
 
@@ -314,7 +327,7 @@ class GooglePlayAPI(object):
 
     def executeRequestApi2(self, path, post_data=None, content_type=CONTENT_TYPE_URLENC, params=None):
         if self.authSubToken is None:
-            raise Exception("You need to login before executing any request")
+            raise LoginError("You need to login before executing any request")
         headers = self.getHeaders()
         headers["Content-Type"] = content_type
 
@@ -350,145 +363,112 @@ class GooglePlayAPI(object):
                   "ssis": "120",
                   "sst": "2"}
         data = self.executeRequestApi2(SEARCH_SUGGEST_URL, params=params)
-        response = data.payload.searchSuggestResponse
-        return [{"type": e.type,
-                 "suggestedQuery": e.suggestedQuery,
-                 "title": e.title} for e in response.entry]
+        entryIterator = data.payload.searchSuggestResponse.entry
+        return list(map(utils.parseProtobufObj, entryIterator))
 
-    def search_withclusters(self, query, nb_result, offset=None, withclusters=True, apps_lookup=None):
+    # def search_withclusters(self, query, nb_result, offset=None, withclusters=True, apps_lookup=None):
+    #     """ Search the play store for an app.
+    #
+    #     nb_result is the maximum number of result to be returned.
+    #
+    #     offset is used to take result starting from an index.
+    #     """
+    #     if self.authSubToken is None:
+    #         raise Exception("You need to login before executing any request")
+    #
+    #     remaining = nb_result
+    #     output = {}
+    #
+    #     apps_count = 0
+    #
+    #     nextPath = SEARCH_URL + "?c=3&q={}".format(requests.utils.quote(query))
+    #
+    #     nextPathList = []
+    #
+    #     while remaining > 0 and nextPath is not None:
+    #         currentPath = nextPath
+    #         # print(currentPath)
+    #         data = self.executeRequestApi2(currentPath)
+    #         if utils.hasPrefetch(data):
+    #             response = data.preFetch[0].response
+    #         else:
+    #             response = data
+    #         if utils.hasSearchResponse(response.payload):
+    #             # we still need to fetch the first page, so go to
+    #             # next loop iteration without decrementing counter
+    #             nextPath = FDFE + response.payload.searchResponse.nextPageUrl
+    #             continue
+    #         if utils.hasListResponse(response.payload):
+    #             cluster = response.payload.listResponse.cluster
+    #             if len(cluster) == 0:
+    #                 # unexpected behaviour, probably due to expired token
+    #                 raise LoginError('Unexpected behaviour, probably expired '
+    #                                  'token')
+    #             cluster = cluster[0]
+    #             # if len(cluster.doc) == 0:
+    #             #     break
+    #             # if cluster.doc[0].containerMetadata.nextPageUrl != "":
+    #             #     nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
+    #             # elif len(cluster.doc) > 1 and cluster.doc[-1].containerMetadata.nextPageUrl != "":
+    #             #     nextPath = urljoin(nextPath, cluster.doc[-1].containerMetadata.nextPageUrl)
+    #             # else:
+    #             #     nextPath = None
+    #             #     # from urllib.parse import urlparse, parse_qs, urlunparse
+    #             #     # o = urlparse(nextPath)
+    #             #     # qs = parse_qs(o.query)
+    #             #     # offset = 4
+    #             #     # qs['ctntkn'] = self.get_token(int(offset))
+    #             #     # o.query = "&".join(qs)
+    #             #     # nextPath = urlunparse(o)
+    #             for doc in cluster.doc:
+    #                 if output.get(doc.backendDocid) is None:
+    #                     output[doc.backendDocid] = []
+    #                 # print(doc.backendDocid, len([r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]), [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)])
+    #                 output[doc.backendDocid] += list(map(utils.fromDocToDictionary, doc.child))
+    #
+    #                 if doc.backendDocid.find('_cluster') >= 0:  # or doc.backendDocid in backendDocid_count
+    #                     apps_count += len(doc.child)
+    #
+    #                 if doc.containerMetadata.nextPageUrl:
+    #                     # print(doc.containerMetadata.nextPageUrl)
+    #                     if nb_result - apps_count > 0 or doc.backendDocid.find('_cluster') == -1:
+    #                         nextPathList.append(doc.containerMetadata.nextPageUrl)
+    #
+    #                 if apps_lookup is not None:
+    #                     apps2 = [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]
+    #                     apps_lookup = set(apps_lookup) - set(apps2)
+    #
+    #             if nextPathList:
+    #                 nextPath = urljoin(currentPath, nextPathList.pop(0))
+    #             else:
+    #                 nextPath = None
+    #
+    #             remaining = 1
+    #             if apps_lookup is not None and not apps_lookup:
+    #                 break
+    #
+    #     return output
+
+    def search(self, query):
         """ Search the play store for an app.
 
-        nb_result is the maximum number of result to be returned.
+        nb_result (int): is the maximum number of result to be returned
 
-        offset is used to take result starting from an index.
+        offset (int): is used to take result starting from an index.
         """
         if self.authSubToken is None:
-            raise Exception("You need to login before executing any request")
-
-        remaining = nb_result
-        output = {}
-
-        apps_count = 0
-
-        nextPath = SEARCH_URL + "?c=3&q={}".format(requests.utils.quote(query))
-
-        nextPathList = []
-
-        while remaining > 0 and nextPath is not None:
-            currentPath = nextPath
-            # print(currentPath)
-            data = self.executeRequestApi2(currentPath)
-            if utils.hasPrefetch(data):
-                response = data.preFetch[0].response
-            else:
-                response = data
-            if utils.hasSearchResponse(response.payload):
-                # we still need to fetch the first page, so go to
-                # next loop iteration without decrementing counter
-                nextPath = FDFE + response.payload.searchResponse.nextPageUrl
-                continue
-            if utils.hasListResponse(response.payload):
-                cluster = response.payload.listResponse.cluster
-                if len(cluster) == 0:
-                    # unexpected behaviour, probably due to expired token
-                    raise LoginError('Unexpected behaviour, probably expired '
-                                     'token')
-                cluster = cluster[0]
-                # if len(cluster.doc) == 0:
-                #     break
-                # if cluster.doc[0].containerMetadata.nextPageUrl != "":
-                #     nextPath = urljoin(nextPath, cluster.doc[0].containerMetadata.nextPageUrl)
-                # elif len(cluster.doc) > 1 and cluster.doc[-1].containerMetadata.nextPageUrl != "":
-                #     nextPath = urljoin(nextPath, cluster.doc[-1].containerMetadata.nextPageUrl)
-                # else:
-                #     nextPath = None
-                #     # from urllib.parse import urlparse, parse_qs, urlunparse
-                #     # o = urlparse(nextPath)
-                #     # qs = parse_qs(o.query)
-                #     # offset = 4
-                #     # qs['ctntkn'] = self.get_token(int(offset))
-                #     # o.query = "&".join(qs)
-                #     # nextPath = urlunparse(o)
-                for doc in cluster.doc:
-                    if output.get(doc.backendDocid) is None:
-                        output[doc.backendDocid] = []
-                    # print(doc.backendDocid, len([r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]), [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)])
-                    output[doc.backendDocid] += list(map(utils.fromDocToDictionary, doc.child))
-
-                    if doc.backendDocid.find('_cluster') >= 0:  # or doc.backendDocid in backendDocid_count
-                        apps_count += len(doc.child)
-
-                    if doc.containerMetadata.nextPageUrl:
-                        # print(doc.containerMetadata.nextPageUrl)
-                        if nb_result - apps_count > 0 or doc.backendDocid.find('_cluster') == -1:
-                            nextPathList.append(doc.containerMetadata.nextPageUrl)
-
-                    if apps_lookup is not None:
-                        apps2 = [r['docId'] for r in map(utils.fromDocToDictionary, doc.child)]
-                        apps_lookup = set(apps_lookup) - set(apps2)
-
-                if nextPathList:
-                    nextPath = urljoin(currentPath, nextPathList.pop(0))
-                else:
-                    nextPath = None
-
-                remaining = 1
-                if apps_lookup is not None and not apps_lookup:
-                    break
-
-        return output
-
-    def search(self, query, nb_result, offset=None):
-        """ Search the play store for an app.
-
-        nb_result is the maximum number of result to be returned.
-
-        offset is used to take result starting from an index.
-        """
-        if self.authSubToken is None:
-            raise Exception("You need to login before executing any request")
-
-        remaining = nb_result
-        output = []
-
-        nextPath = SEARCH_URL + "?c=3&q={}".format(requests.utils.quote(query))
-        if (offset is not None):
-            nextPath += "&o={}".format(offset)
-        while remaining > 0 and nextPath is not None:
-            currentPath = nextPath
-            data = self.executeRequestApi2(currentPath)
-            if utils.hasPrefetch(data):
-                response = data.preFetch[0].response
-            else:
-                response = data
-            if utils.hasSearchResponse(response.payload):
-                # we still need to fetch the first page, so go to
-                # next loop iteration without decrementing counter
-                nextPath = FDFE + response.payload.searchResponse.nextPageUrl
-                continue
-            if utils.hasListResponse(response.payload):
-                cluster = response.payload.listResponse.cluster
-                if len(cluster) == 0:
-                    # unexpected behaviour, probably due to expired token
-                    raise LoginError('Unexpected behaviour, probably expired '
-                                     'token')
-                cluster = cluster[0]
-                if len(cluster.doc) == 0:
-                    break
-                if cluster.doc[0].containerMetadata.nextPageUrl != "":
-                    nextPath = FDFE + cluster.doc[0].containerMetadata.nextPageUrl
-                else:
-                    nextPath = None
-                apps = []
-                for doc in cluster.doc:
-                    apps.extend(doc.child)
-                output += list(map(utils.fromDocToDictionary, apps))
-                remaining -= len(apps)
-
-        if len(output) > nb_result:
-            output = output[:nb_result]
-
-        return output
+            raise LoginError("You need to login before executing any request")
+        # &sb=5
+        path = SEARCH_URL + "?q={}&o=0&c=3&fss=0".format(requests.utils.quote(query))
+        # FIXME: not sure if this toc call should be here
+        # self.toc()
+        data = self.executeRequestApi2(path)
+        if utils.hasPrefetch(data):
+            response = data.preFetch[0].response
+        else:
+            response = data
+        resIterator = response.payload.listResponse.doc
+        return list(map(utils.parseProtobufObj, resIterator))
 
     def details(self, packageName):
         """Get app details from a package name.
@@ -496,18 +476,19 @@ class GooglePlayAPI(object):
         packageName is the app unique ID (usually starting with 'com.')."""
         path = DETAILS_URL + "?doc={}".format(requests.utils.quote(packageName))
         data = self.executeRequestApi2(path)
-        result = utils.fromDocToDictionary(data.payload.detailsResponse.docV2)
-        for r in data.payload.detailsResponse.docV2.unknown25.item:
-            if r.label == 'Released on':
-                result['releaseDate'] = r.container.value
-            elif r.label == 'Developer e-mail':
-                result['email'] = r.container.value
-            elif r.label == 'Developer address':
-                result['address'] = r.container.value
-            elif r.label == 'In-app purchases':
-                result['inapp'] = True
-            # else:
-            #     result[r.label] = r.container.value
+        result = utils.parseProtobufObj(data.payload.detailsResponse.docV2)
+        if result.get('unknown25'):
+            for r in result['unknown25']['item']:
+                if r['label'] == 'Released on':
+                    result['releaseDate'] = r['container']['value']
+                elif r['label'] == 'Developer e-mail':
+                    result['email'] = r['container']['value']
+                elif r['label'] == 'Developer address':
+                    result['address'] = r['container']['value']
+                elif r['label'] == 'In-app purchases':
+                    result['inapp'] = True
+                # else:
+                #     result[r.label] = r.container.value
         return result
 
     def bulkDetails(self, packageNames):
@@ -534,19 +515,20 @@ class GooglePlayAPI(object):
                                           params=params)
         response = message.payload.bulkDetailsResponse
         return [None if not utils.hasDoc(entry) else
-                utils.fromDocToDictionary(entry.doc)
+                utils.parseProtobufObj(entry.doc)
                 for entry in response.entry]
 
-    def getHomeApps(self):
+    def home(self, cat=None):
         path = HOME_URL + "?c=3&nocache_isui=true"
+        if cat is not None:
+            path += "&cat={}".format(cat)
         data = self.executeRequestApi2(path)
-        output = []
-        cluster = data.preFetch[0].response.payload.listResponse.cluster[0]
-        for doc in cluster.doc:
-            output.append({"categoryId": doc.docid,
-                           "categoryStr": doc.title,
-                           "apps": [utils.fromDocToDictionary(c) for c in doc.child]})
-        return output
+        if utils.hasPrefetch(data):
+            response = data.preFetch[0].response
+        else:
+            response = data
+        resIterator = response.payload.listResponse.doc
+        return list(map(utils.parseProtobufObj, resIterator))
 
     def browse(self, cat=None, subCat=None):
         """Browse categories. If neither cat nor subcat are specified,
@@ -559,47 +541,30 @@ class GooglePlayAPI(object):
             path += "&ctr={}".format(requests.utils.quote(subCat))
         data = self.executeRequestApi2(path)
 
-        if cat is None and subCat is None:
-            # result contains all categories available
-            return [{'name': c.name,
-                     'dataUrl': c.dataUrl,
-                     'catId': c.unknownCategoryContainer.categoryIdContainer.categoryId}
-                    for c in data.payload.browseResponse.category]
-
-        output = []
-        clusters = []
-
-        if utils.hasPrefetch(data):
-            for pf in data.preFetch:
-                clusters.extend(pf.response.payload.listResponse.cluster)
-
-        # result contains apps of a specific category
-        # organized by sections
-        for cluster in clusters:
-            for doc in cluster.doc:
-                apps = [a for a in doc.child]
-                apps = list(map(utils.fromDocToDictionary,
-                                apps))
-                section = {'title': doc.title,
-                           'docid': doc.docid,
-                           'apps': apps}
-                output.append(section)
-        return output
+        return utils.parseProtobufObj(data.payload.browseResponse)
 
     def list(self, cat, ctr=None, nb_results=None, offset=None):
-        """List apps for a specfic category *cat*.
+        """List all possible subcategories for a specific category. If
+        also a subcategory is provided, list apps from this category.
 
-        If ctr (subcategory ID) is None, returns a list of valid subcategories.
-
-        If ctr is provided, list apps within this subcategory."""
+        Args:
+            cat (str): category id
+            ctr (str): subcategory id
+            nb_results (int): if a subcategory is specified, limit number
+                of results to this number
+            offset (int): if a subcategory is specified, start counting from this
+                result
+        Returns:
+            A list of categories. If subcategory is specified, a list of apps in this
+            category.
+        """
         path = LIST_URL + "?c=3&cat={}".format(requests.utils.quote(cat))
         if ctr is not None:
             path += "&ctr={}".format(requests.utils.quote(ctr))
         if nb_results is not None:
-            path += "&n={}".format(requests.utils.quote(nb_results))
+            path += "&n={}".format(requests.utils.quote(str(nb_results)))
         if offset is not None:
-            # path += "&o={}".format(requests.utils.quote(offset))
-            # path += '&ctntkn=' +self.get_token(int(offset))
+            path += "&o={}".format(requests.utils.quote(str(offset)))
             path += "&ctntkn=" + self.get_token(int(offset))
         data = self.executeRequestApi2(path)
         clusters = []
@@ -607,19 +572,16 @@ class GooglePlayAPI(object):
         if ctr is None:
             # list subcategories
             for pf in data.preFetch:
-                clusters.extend(pf.response.payload.listResponse.cluster)
-            for c in clusters:
-                docs.extend(c.doc)
-            return [d.docid for d in docs]
+                for cluster in pf.response.payload.listResponse.doc:
+                    clusters.extend(cluster.child)
+            return [c.docid for c in clusters]
         else:
-            childs = []
-            clusters.extend(data.payload.listResponse.cluster)
-            for c in clusters:
-                docs.extend(c.doc)
-            for d in docs:
-                childs.extend(d.child)
-            return [utils.fromDocToDictionary(c)
-                    for c in childs]
+            apps = []
+            for d in data.payload.listResponse.doc: # categories
+                for c in d.child: # sub-category
+                    for a in c.child: # app
+                        apps.append(utils.parseProtobufObj(a))
+            return apps
 
     def reviews(self, packageName, filterByDevice=False, sort=2,
                 nb_results=None, offset=None):
@@ -636,6 +598,7 @@ class GooglePlayAPI(object):
             dict object containing all the protobuf data returned from
             the api
         """
+        # TODO: select the number of reviews to return
         path = REVIEWS_URL + "?doc={}&sort={}".format(requests.utils.quote(packageName), sort)
         if nb_results is not None:
             path += "&n={}".format(nb_results)
@@ -645,19 +608,8 @@ class GooglePlayAPI(object):
             path += "&dfil=1"
         data = self.executeRequestApi2(path)
         output = []
-        for rev in data.payload.reviewResponse.getResponse.review:
-            author = {'personIdString': rev.author2.personIdString,
-                      'personId': rev.author2.personId,
-                      'name': rev.author2.name,
-                      'profilePicUrl': rev.author2.urls.url,
-                      'googlePlusUrl': rev.author2.googlePlusUrl}
-            review = {'documentVersion': rev.documentVersion,
-                      'timestampMsec': rev.timestampMsec,
-                      'starRating': rev.starRating,
-                      'comment': rev.comment,
-                      'commentId': rev.commentId,
-                      'author': author}
-            output.append(review)
+        for review in data.payload.reviewResponse.getResponse.review:
+            output.append(utils.parseProtobufObj(review))
         return output
 
     def _deliver_data(self, url, cookies):
@@ -758,11 +710,12 @@ class GooglePlayAPI(object):
         """
 
         if self.authSubToken is None:
-            raise Exception("You need to login before executing any request")
+            raise LoginError("You need to login before executing any request")
 
         if versionCode is None:
             # pick up latest version
-            versionCode = self.details(packageName).get('versionCode')
+            appDetails = self.details(packageName).get('details').get('appDetails')
+            versionCode = appDetails.get('versionCode')
 
         headers = self.getHeaders()
         params = {'ot': str(offerType),
@@ -798,6 +751,35 @@ class GooglePlayAPI(object):
         response = googleplay_pb2.ResponseWrapper.FromString(response.content)
         if response.commands.displayErrorMessage != "":
             raise RequestError(response.commands.displayErrorMessage)
+
+    def toc(self):
+        response = requests.get(TOC_URL,
+                               headers=self.getHeaders(),
+                               verify=ssl_verify,
+                               timeout=60,
+                               proxies=self.proxies_config)
+        data = googleplay_pb2.ResponseWrapper.FromString(response.content)
+        tocResponse = data.payload.tocResponse
+        if utils.hasTosContent(tocResponse) and utils.hasTosToken(tocResponse):
+            self.acceptTos(tocResponse.tosToken)
+        if utils.hasCookie(tocResponse):
+            self.dfeCookie = tocResponse.cookie
+        return utils.parseProtobufObj(tocResponse)
+
+
+    def acceptTos(self, tosToken):
+        params = {
+            "tost": tosToken,
+            "toscme": "false"
+        }
+        response = requests.get(ACCEPT_TOS_URL,
+                               headers=self.getHeaders(),
+                               params=params,
+                               verify=ssl_verify,
+                               timeout=60,
+                               proxies=self.proxies_config)
+        data = googleplay_pb2.ResponseWrapper.FromString(response.content)
+        return utils.parseProtobufObj(data.payload.acceptTosResponse)
 
     @staticmethod
     def getDevicesCodenames():

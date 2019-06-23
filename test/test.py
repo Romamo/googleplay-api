@@ -10,6 +10,7 @@ ap.add_argument('-g', '--gsfId', dest='gsfId', help='google gsfId')
 ap.add_argument('-a', '--authSubToken', dest='authSubToken', help='google authSubToken')
 ap.add_argument('-l', '--lang', dest='language', help='language', default='en_US')
 ap.add_argument('-t', '--tz', dest='timezone', help='timezone', default='Europe/Rome')
+ap.add_argument('-d', '--docid', dest='docid', help='docid')
 
 args = ap.parse_args()
 
@@ -29,30 +30,68 @@ else:
 # SEARCH
 
 # DETAILS
-# print('\nGetting details for %s\n' % testApps[0])
-details = server.details("com.funnyvideos.babytoy")
+# if args.docid:
+#     print('\nGetting details for %s\n' % args.docid)
+#     details = server.details(args.docid)
+#     print(details)
 
-print(details)
+# print('\nSearch suggestion for "fir"\n')
+# print(server.searchSuggest('fir'))
 
-
-apps = server.search('fir', 100, None)
-
-print('\nSearch suggestion for "fir"\n')
-print(server.searchSuggest('fir'))
-
-print('nb_result: 100')
-print('number of results: %d' % len(apps))
-
+apps = server.search('test')
 print('\nFound those apps:\n')
 for a in apps:
-    print(a['docId'])
+    for b in a['child']:
+        print(b['docType'], b.get('title'))
+        # print(b['title'])
+        for c in b['child']:
+            if c['docType'] == 53:
+                print("Key", c['title'])
+            elif c['docType'] == 1:
+                try:
+                    is_ad = c['relatedLinks']['unknown7']['relatedLinksAd']['type'] == 'Ad'
+                except KeyError:
+                    is_ad = False
+                print(c['docid'], is_ad)
 
-print("Search with clusters")
-# clusters = server.search_withclusters('strangers chat', 100, None)
-# clusters = server.search_withclusters('facebook downloader', 100, None)
-# clusters = server.search_withclusters('zombie games', 100, None)
-clusters = server.search_withclusters('chicken run', 100, None)
-print('nb_result: 100')
+# apps = server.search('minesweeper')
+# print('\nFound those apps:\n')
+# for a in apps:
+#     for b in a['child']:
+#         print(b['docType'], b.get('title'))
+#         # print(b['title'])
+#         for c in b['child']:
+#             if c['docType'] == 53:
+#                 print("Key", c['title'])
+#             elif c['docType'] == 1:
+#                 try:
+#                     is_ad = c['relatedLinks']['unknown7']['relatedLinksAd']['type'] == 'Ad'
+#                 except KeyError:
+#                     is_ad = False
+#                 print(c['docid'], is_ad)
+#
+# apps = server.search('rise up')
+# print('\nFound those apps:\n')
+# for a in apps:
+#     for b in a['child']:
+#         print(b['docType'], b.get('title'))
+#         # print(b['title'])
+#         for c in b['child']:
+#             if c['docType'] == 53:
+#                 print("Key", c['title'])
+#             elif c['docType'] == 1:
+#                 try:
+#                     is_ad = c['relatedLinks']['unknown7']['relatedLinksAd']['type'] == 'Ad'
+#                 except KeyError:
+#                     is_ad = False
+#                 print(c['docid'], is_ad)
+
+# print("Search with clusters")
+# # clusters = server.search_withclusters('strangers chat', 100, None)
+# # clusters = server.search_withclusters('facebook downloader', 100, None)
+# # clusters = server.search_withclusters('zombie games', 100, None)
+# clusters = server.search_withclusters('chicken run', 100, None)
+# print('nb_result: 100')
 # print('number of results: %d' % len(apps))
 
 # print('\nFound those apps:\n')
@@ -142,3 +181,4 @@ appList = server.list(cat, catList[0])  #, nb_results='200', offset='50'
 print(len(appList))
 for app in appList:
     print(app['docId'])
+
