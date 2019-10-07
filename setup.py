@@ -12,6 +12,9 @@ CURRENT_DIR = os.path.abspath( os.path.dirname( __file__ ) )
 class ProtobufBuilder(_build):
 
     def run(self):
+        # apt install protobuf-compiler
+        # cd
+
         # check if protobuf is installed
         # if not os.path.isfile(PROTOC_BIN):
         #     raise Exception("You should install protobuf compiler")
