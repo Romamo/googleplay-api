@@ -583,6 +583,31 @@ class GooglePlayAPI(object):
                         apps.append(utils.parseProtobufObj(a))
             return apps
 
+    def listAll(self, cat, ctr):
+        """List all possible subcategories for a specific category. If
+        also a subcategory is provided, list apps from this category.
+
+        Args:
+            cat (str): category id
+        Returns:
+            A list of apps.
+        """
+        path = LIST_URL + "?c=3&ctr={}&cat={}&n=100".format(requests.utils.quote(ctr), requests.utils.quote(cat))
+        apps = []
+        repeats = 5
+        while repeats:
+            data = self.executeRequestApi2(path)
+            for d in data.payload.listResponse.doc: # categories
+                for c in d.child: # sub-category
+                    for a in c.child: # app
+                        apps.append(utils.parseProtobufObj(a))
+            repeats -= 1
+            if data.payload.listResponse.doc[0].child[0].containerMetadata.nextPageUrl:
+                path = urljoin(path, data.payload.listResponse.doc[0].child[0].containerMetadata.nextPageUrl)
+                continue
+            break
+        return apps
+
     def reviews(self, packageName, filterByDevice=False, sort=2,
                 nb_results=None, offset=None):
         """Browse reviews for an application
@@ -670,12 +695,20 @@ class GooglePlayAPI(object):
             result = {}
             result['docId'] = packageName
             result['additionalData'] = []
+            result['splits'] = []
             downloadUrl = response.payload.deliveryResponse.appDeliveryData.downloadUrl
             cookie = response.payload.deliveryResponse.appDeliveryData.downloadAuthCookie[0]
             cookies = {
                 str(cookie.name): str(cookie.value)
             }
             result['file'] = self._deliver_data(downloadUrl, cookies)
+
+            for split in response.payload.deliveryResponse.appDeliveryData.split:
+                a = {}
+                a['name'] = split.name
+                a['file'] = self._deliver_data(split.downloadUrl, None)
+                result['splits'].append(a)
+
             if not expansion_files:
                 return result
             for obb in response.payload.deliveryResponse.appDeliveryData.additionalFile:
@@ -765,6 +798,21 @@ class GooglePlayAPI(object):
         if utils.hasCookie(tocResponse):
             self.dfeCookie = tocResponse.cookie
         return utils.parseProtobufObj(tocResponse)
+
+    def customerProfile(self):
+        response = requests.post(FDFE + "customerProfile",
+                               headers=self.getHeaders(),
+                               verify=ssl_verify,
+                               timeout=60,
+                               proxies=self.proxies_config)
+        data = googleplay_pb2.ResponseWrapper.FromString(response.content)
+        print(1)
+        # tocResponse = data.payload.tocResponse
+        # if utils.hasTosContent(tocResponse) and utils.hasTosToken(tocResponse):
+        #     self.acceptTos(tocResponse.tosToken)
+        # if utils.hasCookie(tocResponse):
+        #     self.dfeCookie = tocResponse.cookie
+        # return utils.parseProtobufObj(tocResponse)
 
 
     def acceptTos(self, tosToken):
