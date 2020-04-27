@@ -468,7 +468,24 @@ class GooglePlayAPI(object):
         else:
             response = data
         resIterator = response.payload.listResponse.doc
-        return list(map(utils.parseProtobufObj, resIterator))
+        response1 = list(map(utils.parseProtobufObj, resIterator))
+
+        try:
+            # Sometimes additional request required
+            path = urljoin(path, response1[0]['containerMetadata']['nextPageUrl'])
+        except KeyError:
+            path = None
+        if path:
+            data = self.executeRequestApi2(path)
+            if utils.hasPrefetch(data):
+                response = data.preFetch[0].response
+            else:
+                response = data
+            resIterator = response.payload.listResponse.doc
+            response2 = list(map(utils.parseProtobufObj, resIterator))
+            return response1 + response2
+
+        return response1
 
     def details(self, packageName):
         """Get app details from a package name.
