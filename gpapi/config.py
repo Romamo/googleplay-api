@@ -81,6 +81,7 @@ class DeviceBuilder(object):
                 "X-DFE-MCCMNC": self.device.get('celloperator'),
                 "X-DFE-Network-Type": "4",
                 "X-DFE-Content-Filters": "",
+                'x-ad-id': '71e02b3f-6f82-40bd-94bd-4af89b3a6a70',
                 "X-DFE-Request-Params": "timeoutMs=4000"}
 
     def getDeviceUploadHeaders(self):
