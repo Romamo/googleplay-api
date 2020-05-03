@@ -822,15 +822,7 @@ class GooglePlayAPI(object):
                                verify=ssl_verify,
                                timeout=60,
                                proxies=self.proxies_config)
-        data = googleplay_pb2.ResponseWrapper.FromString(response.content)
-        print(1)
-        # tocResponse = data.payload.tocResponse
-        # if utils.hasTosContent(tocResponse) and utils.hasTosToken(tocResponse):
-        #     self.acceptTos(tocResponse.tosToken)
-        # if utils.hasCookie(tocResponse):
-        #     self.dfeCookie = tocResponse.cookie
-        # return utils.parseProtobufObj(tocResponse)
-
+        return response
 
     def acceptTos(self, tosToken):
         params = {
