@@ -36,6 +36,7 @@ TOC_URL = FDFE + "toc"
 ACCEPT_TOS_URL = FDFE + "acceptTos"
 LIST_URL = FDFE + "list"
 REVIEWS_URL = FDFE + "rev"
+CUSTOMER_PROFILE_URL = FDFE + "customerProfile"
 
 CONTENT_TYPE_URLENC = "application/x-www-form-urlencoded; charset=UTF-8"
 CONTENT_TYPE_PROTO = "application/x-protobuf"
@@ -600,8 +601,8 @@ class GooglePlayAPI(object):
                         apps.append(utils.parseProtobufObj(a))
             return apps
 
-    def listAll(self, cat, ctr):
-        """List all possible subcategories for a specific category. If
+    def listAll(self, cat, ctr, sleep=0):
+        """List all possible apps for a specific category. If
         also a subcategory is provided, list apps from this category.
 
         Args:
@@ -609,10 +610,12 @@ class GooglePlayAPI(object):
         Returns:
             A list of apps.
         """
-        path = LIST_URL + "?c=3&ctr={}&cat={}&n=100".format(requests.utils.quote(ctr), requests.utils.quote(cat))
+        path = LIST_URL + "?c=3&ctr={}&cat={}&n={}".format(requests.utils.quote(ctr), requests.utils.quote(cat), 100)
         apps = []
         repeats = 5
+        import time
         while repeats:
+#            print(path)
             data = self.executeRequestApi2(path)
             for d in data.payload.listResponse.doc: # categories
                 for c in d.child: # sub-category
@@ -621,6 +624,7 @@ class GooglePlayAPI(object):
             repeats -= 1
             if data.payload.listResponse.doc[0].child[0].containerMetadata.nextPageUrl:
                 path = urljoin(path, data.payload.listResponse.doc[0].child[0].containerMetadata.nextPageUrl)
+                time.sleep(sleep)
                 continue
             break
         return apps
@@ -816,13 +820,19 @@ class GooglePlayAPI(object):
             self.dfeCookie = tocResponse.cookie
         return utils.parseProtobufObj(tocResponse)
 
-    def customerProfile(self):
-        response = requests.post(FDFE + "customerProfile",
-                               headers=self.getHeaders(),
-                               verify=ssl_verify,
-                               timeout=60,
-                               proxies=self.proxies_config)
-        return response
+    def customerProfile(self, session=None):
+        if session:
+            return session.post(CUSTOMER_PROFILE_URL,
+                                   headers=self.getHeaders(),
+                                   # verify=ssl_verify,
+                                   timeout=60,
+                                   proxy=self.proxies_config)
+        else:
+            return requests.post(CUSTOMER_PROFILE_URL,
+                         headers=self.getHeaders(),
+                         verify=ssl_verify,
+                         timeout=60,
+                         proxies=self.proxies_config)
 
     def acceptTos(self, tosToken):
         params = {
