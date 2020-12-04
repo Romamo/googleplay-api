@@ -37,6 +37,7 @@ ACCEPT_TOS_URL = FDFE + "acceptTos"
 LIST_URL = FDFE + "list"
 REVIEWS_URL = FDFE + "rev"
 CUSTOMER_PROFILE_URL = FDFE + "customerProfile"
+FLAG_URL = FDFE + "flagContent"
 
 CONTENT_TYPE_URLENC = "application/x-www-form-urlencoded; charset=UTF-8"
 CONTENT_TYPE_PROTO = "application/x-protobuf"
@@ -833,6 +834,18 @@ class GooglePlayAPI(object):
                          verify=ssl_verify,
                          timeout=60,
                          proxies=self.proxies_config)
+
+    def flagContent(self, docid, cft):
+        params = {
+            "doc": docid,
+            "cft": cft
+        }
+        return requests.post(FLAG_URL,
+                             params=params,
+                             headers=self.getHeaders(),
+                             verify=ssl_verify,
+                             timeout=60,
+                             proxies=self.proxies_config)
 
     def acceptTos(self, tosToken):
         params = {
